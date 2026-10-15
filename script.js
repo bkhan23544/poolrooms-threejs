@@ -1,6 +1,6 @@
 
 import * as THREE from 'three/webgpu';
-import { vec2, vec3, float, positionWorld, normalWorld, cameraPosition, cameraViewMatrix, time, mix, smoothstep, fract, floor, min, max, abs, dot, normalize, pow, clamp, sin, cos, exp, select, hash, uniform, texture, pass, transformDirection, fwidth, distance, reflect, screenUV, vec4 } from 'three/tsl';
+import { vec2, vec3, float, positionWorld, normalWorld, cameraPosition, cameraViewMatrix, time, mix, smoothstep, fract, floor, min, max, abs, dot, normalize, pow, clamp, sin, cos, tan, exp, select, hash, uniform, texture, pass, transformDirection, fwidth, distance, length, reflect, screenUV, screenSize, vec4, convertToTexture } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
@@ -271,15 +271,31 @@ for (const p of pools) {
   }
 }
 
-/* ---------- post: just a whisper of bloom on the windows ---------- */
+/* ---------- post: center-bulge fisheye + whisper of bloom ---------- */
+const fishBulge = 0.9; // dome strength (keep under ~1.4; corners stay pinned so no edge tiling)
 const post = new THREE.PostProcessing(renderer);
 const sp = pass(scene, camera);
+// bloom first (undistorted), then fisheye-sample the combined image so glow sticks to the lights
+const preFish = convertToTexture(sp.add(bloom(sp, 0.3, 0.7, 1.0)));
 post.outputNode = (() => {
-  const c = sp.add(bloom(sp, 0.3, 0.7, 1.0)).rgb; // soft halos around the windows only
-  const v = screenUV.sub(0.5);
-  const vig = pow(clamp(float(1).sub(dot(v, v).mul(0.9)), 0, 1), 1.3);
+  // circular coords so the bulge is a round dome, not stretched by aspect
+  const aspect = screenSize.x.div(screenSize.y);
+  const uv = vec2(screenUV.x.sub(0.5).mul(aspect), screenUV.y.sub(0.5));
+  const r = length(uv).max(1e-4);
+  const corner = length(vec2(aspect.mul(0.5), float(0.5))); // pin screen corners → no wrap/tile at edges
+  const rn = r.div(corner);
+  const newRn = tan(rn.mul(fishBulge)).div(tan(float(fishBulge)));
+  const warped = uv.mul(newRn.div(rn));
+  const fishUV = vec2(warped.x.div(aspect), warped.y).add(0.5);
+  const ca = uv.mul(dot(uv, uv).mul(0.012));
+  const caUV = vec2(ca.x.div(aspect), ca.y);
+  const c = vec3(
+    preFish.sample(fishUV.add(caUV)).r,
+    preFish.sample(fishUV).g,
+    preFish.sample(fishUV.sub(caUV)).b
+  );
   const grain = fract(sin(dot(screenUV.add(fract(time.mul(0.37))), vec2(12.9898, 78.233))).mul(43758.5453)).sub(0.5).mul(0.02);
-  return vec4(c.mul(vig).mul(vec3(0.97, 1.0, 0.985)).add(grain), 1);
+  return vec4(c.mul(vec3(0.97, 1.0, 0.985)).add(grain), 1);
 })();
 
 /* ---------- controls ---------- */

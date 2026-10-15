@@ -25,6 +25,18 @@
 </script>
 </head>
 <body>
+<div id="loader">
+  <span id="loaderWord">Poolrooms</span>
+  <span id="loaderBar"><i id="loaderFill"></i></span>
+  <span id="loaderLabel">Loading engine</span>
+</div>
+<script>
+  const loader = document.getElementById('loader'), loaderFill = document.getElementById('loaderFill'), loaderLabel = document.getElementById('loaderLabel');
+  let loaderPct = 0;
+  window.__ld = (pct, text) => { loaderPct = pct; loaderFill.style.width = Math.min(100, pct) + '%'; loaderLabel.textContent = text; };
+  window.__ldDone = () => { loader.style.opacity = 0; setTimeout(() => loader.style.display = 'none', 500); };
+  setTimeout(() => { if (!loaderPct) loaderLabel.textContent = 'Slow network? The engine loads from a CDN'; }, 15000);
+</script>
 <div id="hint">Click to look, WASD to walk. On a phone: left thumb walks, right thumb looks.</div>
 <nav id="links">
   <a href="https://github.com/bkhan23544/poolrooms-threejs" target="_blank" rel="noopener noreferrer">Code</a>

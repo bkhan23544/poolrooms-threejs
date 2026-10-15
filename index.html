@@ -4,24 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Poolrooms</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-2XV7H4SS69"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-2XV7H4SS69');
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 {"imports":{
-"three":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.webgpu.js",
-"three/webgpu":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.webgpu.js",
-"three/tsl":"https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.tsl.js",
-"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"}}
+"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.js",
+"three/webgpu":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.js",
+"three/tsl":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.tsl.js",
+"three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}
 </script>
 </head>
 <body>
+<div id="loader">
+  <span id="loaderWord">Poolrooms</span>
+  <span id="loaderBar"><i id="loaderFill"></i></span>
+  <span id="loaderLabel">Loading engine</span>
+</div>
+<script>
+  const loader = document.getElementById('loader'), loaderFill = document.getElementById('loaderFill'), loaderLabel = document.getElementById('loaderLabel');
+  let loaderPct = 0;
+  window.__ld = (pct, text) => { loaderPct = pct; loaderFill.style.width = Math.min(100, pct) + '%'; loaderLabel.textContent = text; };
+  window.__ldDone = () => { loader.style.opacity = 0; setTimeout(() => loader.style.display = 'none', 500); };
+  setTimeout(() => { if (!loaderPct) loaderLabel.textContent = 'Slow network? The engine loads from a CDN'; }, 15000);
+</script>
 <div id="hint">Click to look, WASD to walk. On a phone: left thumb walks, right thumb looks.</div>
 <nav id="links">
   <a href="https://github.com/bkhan23544/poolrooms-threejs" target="_blank" rel="noopener noreferrer">Code</a>
   <a href="https://x.com/bk23544" target="_blank" rel="noopener noreferrer">Follow on X</a>
 </nav>
+<script>
+  document.querySelectorAll('#links a').forEach(a => {
+    const isGithub = a.href.includes('github.com');
+    a.addEventListener('click', () => gtag('event', isGithub ? 'code_click' : 'follow_on_x'));
+  });
+</script>
 <div id="msg"></div>
 <script type="module" src="script.js"></script>
 </body>

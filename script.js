@@ -5,6 +5,8 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
+window.__ld(30, 'Starting renderer'); // the module only runs once three.js itself has arrived
+
 const X0 = -20, X1 = 20, Z0 = -34, Z1 = 14, H = 9, WL = -0.12;
 const pools = [{ cx: -7, cz: 0, w: 13, d: 9 }, { cx: -5, cz: -17, w: 16, d: 9 }];
 const RAIL = 1.1, COPING = 0.45, CORNER = 1.0;
@@ -16,7 +18,8 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.68;
 document.body.appendChild(renderer.domElement);
 
-try { await renderer.init(); } catch (e) {
+try { await renderer.init(); window.__ld(50, 'Loading environment'); } catch (e) {
+  window.__ldDone();
   const m = document.getElementById('msg'); m.style.display = 'flex';
   m.textContent = 'This browser cannot start WebGPU or WebGL 2. Try a recent Chrome, Edge, Safari or Firefox.'; throw e;
 }
@@ -165,6 +168,7 @@ copingMat.emissiveNode = sampleMirror(floorMirror, vec2(0, 0), glossyRadius(floo
 
 const envMap = await new RGBELoader().loadAsync('monochrome_studio_02_1k.hdr');
 envMap.mapping = THREE.EquirectangularReflectionMapping;
+window.__ld(70, 'Building room');
 
 const railMat = new THREE.MeshStandardNodeMaterial({ color: 0x757575, metalness: 1, roughness: 0.22, envMap, envMapIntensity: 1 });
 
@@ -332,9 +336,9 @@ const blocked = (x, z) => {
 };
 
 addEventListener('resize', () => { fitFov(); renderer.setSize(innerWidth, innerHeight); });
-setTimeout(() => { document.getElementById('hint').style.opacity = 0; }, 7000);
 
-let last = performance.now();
+let last = performance.now(), frames = 0;
+window.__ld(88, 'Warming shaders');
 renderer.setAnimationLoop(() => {
   const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
   const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) - joy.y;
@@ -355,4 +359,6 @@ renderer.setAnimationLoop(() => {
   });
   if (frustum.intersectsBox(wallBoxes.ceil ||= new THREE.Box3().setFromObject(ceilMesh))) renderMirror(ceilMirror, [ceilMesh]);
   post.render();
+  // two frames in: the node materials are compiled and the canvas is actually showing the room
+  if (++frames === 2) { window.__ldDone(); setTimeout(() => document.getElementById('hint').style.opacity = 0, 7000); }
 });

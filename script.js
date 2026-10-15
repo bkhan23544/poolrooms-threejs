@@ -2,6 +2,8 @@
 import * as THREE from 'three/webgpu';
 import { vec2, vec3, float, positionWorld, normalWorld, cameraPosition, cameraViewMatrix, time, mix, smoothstep, fract, floor, min, max, abs, dot, normalize, pow, clamp, sin, cos, exp, select, hash, uniform, texture, pass, transformDirection, fwidth, distance, reflect, screenUV, vec4 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 const X0 = -20, X1 = 20, Z0 = -34, Z1 = 14, H = 9, WL = -0.12;
 const pools = [{ cx: -7, cz: 0, w: 13, d: 9 }, { cx: -5, cz: -17, w: 16, d: 9 }];
@@ -25,6 +27,7 @@ scene.fog = new THREE.FogExp2(0x6b7770, 0.007); // dark, thin atmosphere: far su
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 200);
 camera.rotation.order = 'YXZ';
 camera.position.set(8, 1.7, 10);
+camera.rotation.set(-0.1, 0.53, 0); // the controls own the look from here on, so set the start pose up front
 const fitFov = () => { camera.aspect = innerWidth / innerHeight; camera.fov = camera.aspect < 1 ? 88 : 70; camera.updateProjectionMatrix(); };
 fitFov();
 
@@ -160,14 +163,10 @@ copingMat.colorNode = vec3(0.74, 0.79, 0.76);
 copingMat.opacityNode = select(cameraPosition.y.greaterThan(0), float(1), float(0)); // its underside must not appear in the mirrors
 copingMat.emissiveNode = sampleMirror(floorMirror, vec2(0, 0), glossyRadius(floorMirror.n, 0.08), 8).mul(0.3).add(vec3(0.74, 0.79, 0.76).mul(glow.mul(0.15)));
 
-const railMat = new THREE.MeshStandardNodeMaterial({ metalness: 0, roughness: 0.3 });
-railMat.colorNode = vec3(0.04, 0.05, 0.05);
-{ // fake studio reflection: bright ceiling above, dim floor below, window hot-spot to the left
-  const Rv = reflect(viewDir().negate(), normalWorld);
-  const sky = mix(vec3(0.3, 0.33, 0.32), vec3(0.95, 0.98, 0.96), clamp(Rv.y.mul(0.5).add(0.5), 0, 1));
-  const win = pow(clamp(dot(Rv, normalize(vec3(-1, 0.25, 0))), 0, 1), 6).mul(1.4);
-  railMat.emissiveNode = sky.add(win).mul(vec3(0.5, 0.55, 0.55));
-}
+const envMap = await new RGBELoader().loadAsync('monochrome_studio_02_1k.hdr');
+envMap.mapping = THREE.EquirectangularReflectionMapping;
+
+const railMat = new THREE.MeshStandardNodeMaterial({ color: 0x757575, metalness: 1, roughness: 0.22, envMap, envMapIntensity: 1 });
 
 /* ---------- room ---------- */
 const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); scene.add(m); return m; };
@@ -284,14 +283,15 @@ post.outputNode = (() => {
 })();
 
 /* ---------- controls ---------- */
-let yaw = 0.53, pitch = -0.1;
+const controls = new PointerLockControls(camera, renderer.domElement);
+controls.pointerSpeed = 1.75; // 0.002 * 1.75 = the 0.0035 rad/px the drag-look used
+controls.minPolarAngle = Math.PI / 2 - 1.3;
+controls.maxPolarAngle = Math.PI / 2 + 1.3; // keeps the old ±1.3 rad pitch clamp
 const keys = {};
 addEventListener('keydown', e => keys[e.code] = true);
 addEventListener('keyup', e => keys[e.code] = false);
 const cv = renderer.domElement;
-cv.addEventListener('pointermove', e => {
-  if (e.pointerType === 'mouse' && e.buttons & 1) { yaw -= e.movementX * 0.0035; pitch = Math.max(-1.3, Math.min(1.3, pitch - e.movementY * 0.0035)); }
-});
+cv.addEventListener('pointerdown', e => { if (e.pointerType !== 'touch') controls.lock(); }); // a click captures the mouse; Esc releases it
 const joy = { id: null, x0: 0, y0: 0, x: 0, y: 0 }, look = { id: null, x: 0, y: 0 };
 cv.addEventListener('touchstart', e => {
   for (const t of e.changedTouches) {
@@ -302,7 +302,7 @@ cv.addEventListener('touchstart', e => {
 cv.addEventListener('touchmove', e => {
   for (const t of e.changedTouches) {
     if (t.identifier === joy.id) { joy.x = Math.max(-1, Math.min(1, (t.clientX - joy.x0) / 55)); joy.y = Math.max(-1, Math.min(1, (t.clientY - joy.y0) / 55)); }
-    if (t.identifier === look.id) { yaw -= (t.clientX - look.x) * 0.006; pitch = Math.max(-1.3, Math.min(1.3, pitch - (t.clientY - look.y) * 0.006)); look.x = t.clientX; look.y = t.clientY; }
+    if (t.identifier === look.id) { camera.rotation.y -= (t.clientX - look.x) * 0.006; camera.rotation.x = Math.max(-1.3, Math.min(1.3, camera.rotation.x - (t.clientY - look.y) * 0.006)); look.x = t.clientX; look.y = t.clientY; }
   }
 }, { passive: true });
 const endT = e => { for (const t of e.changedTouches) { if (t.identifier === joy.id) { joy.id = null; joy.x = joy.y = 0; } if (t.identifier === look.id) look.id = null; } };
@@ -322,13 +322,12 @@ renderer.setAnimationLoop(() => {
   const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) - joy.y;
   const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + joy.x;
   const spd = (keys.ShiftLeft ? 7 : 3.6) * dt;
-  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  const yaw = camera.rotation.y, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   const dx = (fx * f - fz * s) * spd, dz = (fz * f + fx * s) * spd;
   const p = camera.position;
   if (!blocked(p.x + dx, p.z)) p.x += dx;
   if (!blocked(p.x, p.z + dz)) p.z += dz;
   p.y = 1.7 + Math.sin(now * 0.0016) * 0.008;
-  camera.rotation.set(pitch, yaw, 0);
   camera.updateMatrixWorld();
   renderMirror(floorMirror, [floorMesh, ...copingMeshes]);
   renderMirror(waterMirror, waterMeshes);

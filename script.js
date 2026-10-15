@@ -283,6 +283,8 @@ post.outputNode = (() => {
 })();
 
 /* ---------- controls ---------- */
+const walkSpeed = 2; // desktop WASD walk speed (units/sec); phone still scales via joystick push
+const sprintSpeed = 5; // desktop Shift sprint speed
 const controls = new PointerLockControls(camera, renderer.domElement);
 controls.pointerSpeed = 1.75; // 0.002 * 1.75 = the 0.0035 rad/px the drag-look used
 controls.minPolarAngle = Math.PI / 2 - 1.3;
@@ -321,7 +323,7 @@ renderer.setAnimationLoop(() => {
   const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
   const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) - joy.y;
   const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + joy.x;
-  const spd = (keys.ShiftLeft ? 7 : 3.6) * dt;
+  const spd = (keys.ShiftLeft ? sprintSpeed : walkSpeed) * dt;
   const yaw = camera.rotation.y, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   const dx = (fx * f - fz * s) * spd, dz = (fz * f + fx * s) * spd;
   const p = camera.position;

@@ -444,10 +444,10 @@ function updateBlink(now) {
 }
 
 /* ---------- sound: Pixabay recordings in sounds/ (see sounds/CREDITS.txt), played through Web Audio ---------- */
-// barefoot steps on tile (10 variations), pool water, and cave drips; footsteps and
+// barefoot steps on tile (7 variations), pool water, and cave drips; footsteps and
 // drips also go through a long synthetic hall reverb so they ring around the tiles like the room does
 const sound = { master: 0.8, steps: 0.9, ambience: 0.6, water: 0.15, muted: false, ctx: null, buf: {} };
-const SND = { step: 10, drip: 6 };
+const SND = { step: 7, drip: 6 };
 function initAudio() {
   if (sound.ctx) { if (sound.ctx.state !== 'running') sound.ctx.resume(); return; }
   const ctx = sound.ctx = new AudioContext();

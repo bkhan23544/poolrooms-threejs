@@ -29,15 +29,28 @@
   <span id="loaderWord">Poolrooms</span>
   <span id="loaderBar"><i id="loaderFill"></i></span>
   <span id="loaderLabel">Loading engine</span>
+  <div id="start">
+    <p id="tagline">Endless tiled halls. Still water. Nobody else here.</p>
+    <ul id="keys">
+      <li><kbd>Mouse</kbd>look</li><li><kbd>W A S D</kbd>walk</li><li><kbd>Shift</kbd>sprint</li>
+      <li><kbd>G</kbd>controls</li><li><kbd>M</kbd>mute</li><li><kbd>Esc</kbd>free cursor</li>
+    </ul>
+    <p id="touchKeys">Left thumb walks, right thumb looks.</p>
+    <button id="startBtn" type="button">Enter</button>
+    <p id="phones">Sound on. Headphones recommended.</p>
+  </div>
 </div>
 <script>
   const loader = document.getElementById('loader'), loaderFill = document.getElementById('loaderFill'), loaderLabel = document.getElementById('loaderLabel');
   let loaderPct = 0;
   window.__ld = (pct, text) => { loaderPct = pct; loaderFill.style.width = Math.min(100, pct) + '%'; loaderLabel.textContent = text; };
-  window.__ldDone = () => { loader.style.opacity = 0; setTimeout(() => loader.style.display = 'none', 500); };
+  // loading finished: the loader turns into the start screen (the room shows, blurred, behind it)
+  window.__ldDone = () => loader.classList.add('ready');
+  window.__ldHide = () => { loader.style.opacity = 0; setTimeout(() => loader.style.display = 'none', 500); };
+  document.getElementById('startBtn').addEventListener('click', () => { window.__ldHide(); window.__onStart?.(); });
   setTimeout(() => { if (!loaderPct) loaderLabel.textContent = 'Slow network? The engine loads from a CDN'; }, 15000);
 </script>
-<div id="hint">Click to look, WASD to walk. On a phone: left thumb walks, right thumb looks.</div>
+<div id="hint">Click to look, WASD to walk, Shift to sprint. G: controls, M: mute. On a phone: left thumb walks, right thumb looks.</div>
 <nav id="links">
   <a href="https://github.com/bkhan23544/poolrooms-threejs" target="_blank" rel="noopener noreferrer">Code</a>
   <a href="https://x.com/bk23544" target="_blank" rel="noopener noreferrer">Follow on X</a>

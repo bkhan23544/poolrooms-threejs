@@ -1,14 +1,21 @@
 
 import * as THREE from 'three/webgpu';
-import { vec2, vec3, float, positionWorld, normalWorld, cameraPosition, cameraViewMatrix, time, mix, smoothstep, fract, floor, min, max, abs, dot, normalize, pow, clamp, sin, cos, tan, exp, select, hash, uniform, texture, pass, transformDirection, fwidth, distance, length, reflect, screenUV, screenSize, vec4, convertToTexture } from 'three/tsl';
+import { vec2, vec3, float, positionWorld, normalWorld, cameraPosition, cameraViewMatrix, time, mix, smoothstep, fract, floor, min, max, abs, dot, normalize, pow, clamp, sin, cos, tan, exp, select, hash, uniform, texture, pass, transformDirection, fwidth, distance, length, reflect, refract, screenUV, screenSize, vec4, convertToTexture } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import GUI from 'three/addons/libs/lil-gui.module.min.js';
 
 window.__ld(30, 'Starting renderer'); // the module only runs once three.js itself has arrived
 
 const X0 = -20, X1 = 20, Z0 = -34, Z1 = 14, H = 9, WL = -0.12;
 const pools = [{ cx: -7, cz: 0, w: 13, d: 9 }, { cx: -5, cz: -17, w: 16, d: 9 }];
+const POOL_DEPTH = 3.5; // basin geometry is built at this depth; the Pool depth slider rescales it live
+// live-tweakable values, driven by the controls panel (see the end of the file)
+const U = {
+  waterDarken: uniform(0.75), seeThrough: uniform(0.75), murk: uniform(1), reflect: uniform(1), waves: uniform(1), glint: uniform(1),
+  depth: uniform(POOL_DEPTH), ao: uniform(1), blink: uniform(0), bulge: uniform(0.9), ca: uniform(0.012), grain: uniform(0.02),
+};
 const RAIL = 1.1, COPING = 0.45, CORNER = 1.0;
 
 const renderer = new THREE.WebGPURenderer({ antialias: true });
@@ -19,7 +26,7 @@ renderer.toneMappingExposure = 0.68;
 document.body.appendChild(renderer.domElement);
 
 try { await renderer.init(); window.__ld(50, 'Loading environment'); } catch (e) {
-  window.__ldDone();
+  window.__ldHide();
   const m = document.getElementById('msg'); m.style.display = 'flex';
   m.textContent = 'This browser cannot start WebGPU or WebGL 2. Try a recent Chrome, Edge, Safari or Firefox.'; throw e;
 }
@@ -35,9 +42,10 @@ const fitFov = () => { camera.aspect = innerWidth / innerHeight; camera.fov = ca
 fitFov();
 
 /* ---------- lighting: soft fill + bounced light that falls off from the window wall ---------- */
-scene.add(new THREE.HemisphereLight(0xeaf2ed, 0xc8d3cb, 1.15));
+const hemi = new THREE.HemisphereLight(0xeaf2ed, 0xc8d3cb, 1.15); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 0.8);
 sun.position.set(-18, 14, 4); scene.add(sun);
+hemi.layers.enable(1); sun.layers.enable(1); // layer 1 = what the refraction pass sees (the basins + their light)
 const glow = exp(distance(positionWorld, vec3(X0, 7.4, positionWorld.z)).div(-12));
 
 /* ---------- tiles (grout is anti-aliased and fades with distance: no moire) ---------- */
@@ -50,6 +58,35 @@ const tile = (uv, size, gw, base, groutCol, vary) => {
   const v = hash(id.x.mul(37.7).add(id.y.mul(91.3))).sub(0.5).mul(vary).add(1);
   return { color: mix(base.mul(v), groutCol, groutAmt.mul(0.9)), mask: groutAmt.oneMinus() };
 };
+
+// ---- ambient occlusion, computed analytically ----
+// The room is boxes, rounded rectangles and rails, so contact darkening comes straight from distances to them:
+// free, stable, no screen-space noise or halos. Strength lives in U.ao (0 = off, 1 = full).
+const sdRBox = (q2, cx, cz, hx, hz, r) => { // signed distance to a rounded rectangle in xz
+  const q = abs(q2.sub(vec2(cx, cz))).sub(vec2(hx - r, hz - r));
+  return length(max(q, 0)).add(min(max(q.x, q.y), 0)).sub(r);
+};
+const occl = (d, radius, darkest) => mix(float(darkest), float(1), smoothstep(0, radius, d)); // 1 = open, darkest = in the crease
+const finishAO = a => mix(float(1), a, U.ao);
+const PW = positionWorld;
+const aoFloor = (() => {
+  let a = occl(min(min(PW.x.sub(X0), float(X1).sub(PW.x)), min(PW.z.sub(Z0 + 2.2), float(Z1).sub(PW.z))), 1.4, 0.5); // walls + back ledge
+  for (const p of pools) {
+    a = a.mul(occl(sdRBox(PW.xz, p.cx, p.cz, p.w / 2 + COPING, p.d / 2 + COPING, CORNER + COPING), 0.18, 0.75)); // coping lip
+    a = a.mul(occl(abs(sdRBox(PW.xz, p.cx, p.cz, p.w / 2 + RAIL, p.d / 2 + RAIL, 0.001)), 0.4, 0.78)); // under the rails
+  }
+  return finishAO(a);
+})();
+const aoWall = xWall => { // xWall: wall faces along x (left/right), else back/front
+  const side = xWall ? min(PW.z.sub(Z0), float(Z1).sub(PW.z)) : min(PW.x.sub(X0), float(X1).sub(PW.x));
+  return finishAO(occl(PW.y, 1.3, 0.55).mul(occl(float(H).sub(PW.y), 1.3, 0.6)).mul(occl(side, 1.3, 0.6)));
+};
+const aoCeil = finishAO(occl(min(min(PW.x.sub(X0), float(X1).sub(PW.x)), min(PW.z.sub(Z0), float(Z1).sub(PW.z))), 1.6, 0.55));
+const aoBasin = (() => {
+  let inside = float(-1e3);
+  for (const p of pools) inside = max(inside, sdRBox(PW.xz, p.cx, p.cz, p.w / 2, p.d / 2, CORNER).negate());
+  return finishAO(occl(PW.y.add(U.depth), 1.0, 0.45).mul(occl(inside, 0.9, 0.55)));
+})();
 
 // ---- live planar mirrors, written from scratch ----
 // Each mirror re-renders the room every frame from a camera reflected through the mirror plane, into its own
@@ -121,6 +158,24 @@ function renderMirror(m, hidden) {
 
 
 
+// refraction: ONLY the pool basins (layer 1), seen from the main camera. Water looks it up by projecting the point
+// where its refracted ray meets the basin, so you see the bent pool bottom. Rails, coping etc. are left out on
+// purpose: they're above the water, so they must never show up "through" it.
+const refrCam = new THREE.PerspectiveCamera();
+const refr = { scale: 0.75, w: 0, ht: 0, vp: uniform(new THREE.Matrix4()), rt: new THREE.RenderTarget(2, 2, { type: THREE.HalfFloatType, samples: 4 }) };
+function renderRefraction() {
+  renderer.getDrawingBufferSize(_s);
+  const w = Math.max(2, Math.round(_s.x * refr.scale)), hh = Math.max(2, Math.round(_s.y * refr.scale));
+  if (w !== refr.w || hh !== refr.ht) { refr.rt.setSize(w, hh); refr.w = w; refr.ht = hh; }
+  refr.vp.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  refrCam.copy(camera); refrCam.layers.set(1);
+  renderer.setRenderTarget(refr.rt); renderer.render(scene, refrCam); renderer.setRenderTarget(null);
+}
+const projUV = (vp, wp) => {
+  const clip = vp.mul(vec4(wp, 1)), ndc = clip.xy.div(clip.w);
+  return clamp(vec2(ndc.x.mul(0.5).add(0.5), ndc.y.mul(-0.5).add(0.5)), 0.001, 0.999);
+};
+
 const viewDir = () => normalize(cameraPosition.sub(positionWorld));
 
 const floorMat = new THREE.MeshStandardNodeMaterial({ metalness: 0 });
@@ -131,6 +186,7 @@ const floorMat = new THREE.MeshStandardNodeMaterial({ metalness: 0 });
   floorMat.roughnessNode = mix(0.9, 0.28, t.mask);
   floorMat.emissiveNode = sampleMirror(floorMirror, vec2(0, 0), glossyRadius(floorMirror.n, 0.08), 18).mul(mix(0.22, 0.7, f)).mul(mix(0.55, 1.0, t.mask)).add(t.color.mul(glow.mul(0.22)));
 }
+floorMat.aoNode = aoFloor; floorMat.emissiveNode = floorMat.emissiveNode.mul(aoFloor);
 const wallMat = new THREE.MeshStandardNodeMaterial({ metalness: 0, roughness: 0.4 });
 {
   const t = tile(vec2(positionWorld.x.add(positionWorld.z), positionWorld.y), vec2(0.16, 0.16), 0.03, vec3(0.7, 0.75, 0.72), vec3(0.55, 0.6, 0.57), 0.03);
@@ -146,7 +202,9 @@ const makeWallMat = (mirror) => { // glazed tile: faint head-on, strong at grazi
   const f = pow(clamp(dot(viewDir(), n), 0, 1).oneMinus(), 3);
   mat.colorNode = t.color.mul(0.9);
   mat.roughnessNode = mix(0.7, 0.5, t.mask);
-  mat.emissiveNode = t.color.mul(glow.mul(0.8)).add(sampleMirror(mirror, vec2(0, 0), glossyRadius(mirror.n, 0.07), 12).mul(mix(0.05, 0.55, f)).mul(mix(0.5, 1.0, t.mask)));
+  const a = aoWall(mirror.n.x !== 0);
+  mat.aoNode = a;
+  mat.emissiveNode = t.color.mul(glow.mul(0.8).mul(a)).add(sampleMirror(mirror, vec2(0, 0), glossyRadius(mirror.n, 0.07), 12).mul(mix(0.05, 0.55, f)).mul(mix(0.5, 1.0, t.mask)));
   return mat;
 };
 const wallMats = wallMirrors.map(makeWallMat);
@@ -154,11 +212,22 @@ const ceilMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness:
 ceilMat.colorNode = vec3(0.4, 0.43, 0.41);
 { // painted ceiling: soft, blurred reflection that strengthens at grazing angles
   const f = pow(clamp(dot(viewDir(), vec3(0, -1, 0)), 0, 1).oneMinus(), 3);
-  ceilMat.emissiveNode = vec3(0.4, 0.43, 0.41).mul(glow.mul(0.95)).add(sampleMirror(ceilMirror, vec2(0, 0), glossyRadius(ceilMirror.n, 0.06), 12).mul(mix(0.15, 0.6, f)));
+  ceilMat.aoNode = aoCeil;
+  ceilMat.emissiveNode = vec3(0.4, 0.43, 0.41).mul(glow.mul(0.95).mul(aoCeil)).add(sampleMirror(ceilMirror, vec2(0, 0), glossyRadius(ceilMirror.n, 0.06), 12).mul(mix(0.15, 0.6, f)));
 }
 
 const basinMat = new THREE.MeshStandardNodeMaterial({ side: THREE.BackSide, roughness: 0.3, alphaTest: 0.5 });
-basinMat.colorNode = vec3(0.12, 0.22, 0.22);
+{ // pale pool tile (floor uses xz, walls x+z/y) with drifting caustics, so you can see into the water
+  const flr = smoothstep(0.5, 0.8, abs(normalWorld.y));
+  const tuv = mix(vec2(positionWorld.x.add(positionWorld.z), positionWorld.y), positionWorld.xz, flr);
+  const t = tile(tuv, vec2(0.25, 0.25), 0.03, vec3(0.42, 0.62, 0.6), vec3(0.24, 0.36, 0.35), 0.05);
+  const cx = positionWorld.x.mul(2.1), cz = positionWorld.z.mul(2.1);
+  const web = abs(sin(cx.add(sin(cz.mul(0.8).add(time.mul(0.7))).mul(1.6))).add(sin(cz.mul(1.1).add(sin(cx.mul(0.7).sub(time.mul(0.6))).mul(1.6))))).mul(0.5);
+  const caustic = pow(web.oneMinus(), 5).mul(flr.mul(0.7).add(0.3));
+  basinMat.colorNode = t.color;
+  basinMat.aoNode = aoBasin;
+  basinMat.emissiveNode = t.color.mul(glow.mul(0.35).mul(aoBasin)).add(vec3(0.55, 0.75, 0.7).mul(caustic).mul(0.35));
+}
 basinMat.opacityNode = select(cameraPosition.y.greaterThan(0), float(1), float(0)); // hidden from the mirror camera
 
 const copingMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.22, metalness: 0, alphaTest: 0.5 });
@@ -218,7 +287,7 @@ const waveGrad = P => {
     const c = cos(dot(P, vec2(dir.x, dir.y)).mul(f).add(time.mul(s))).mul(a * f);
     gx = gx.add(c.mul(dir.x)); gz = gz.add(c.mul(dir.y));
   }
-  return vec2(gx, gz);
+  return vec2(gx, gz).mul(U.waves);
 };
 
 
@@ -238,9 +307,24 @@ function makeWater(p, shape) {
   const rim = vec3(0.004, 0.045, 0.048), teal = vec3(0.012, 0.3, 0.29), emerald = vec3(0.02, 0.4, 0.32);
   const body = mix(rim, mix(teal, emerald, lowN), clamp(centre.mul(0.85).add(lowN.mul(0.15)), 0, 1)).mul(lowN.mul(0.3).add(0.85));
   const Rv = reflect(viewDir().negate(), nW);
-  const glint = pow(clamp(dot(Rv, normalize(vec3(-0.8, 0.45, -0.35))), 0, 1), 60).mul(3.5);
+  const glint = pow(clamp(dot(Rv, normalize(vec3(-0.8, 0.45, -0.35))), 0, 1), 60).mul(3.5).mul(U.glint);
+  // refraction (water IOR 1.33): bend the view ray at the wavy surface, follow it to the basin floor,
+  // and read that point back from the refraction target. Light is absorbed along the path, red first.
+  const T = refract(viewDir().negate(), nW, 1 / 1.33);
+  const pathLen = U.depth.add(WL).div(max(T.y.negate(), 0.2));
+  const hit0 = positionWorld.add(T.mul(pathLen)); // keep it inside the basin (a ray leaving it would hit a wall first)
+  const hit = vec3(clamp(hit0.x, p.cx - p.w / 2 + 0.02, p.cx + p.w / 2 - 0.02), hit0.y, clamp(hit0.z, p.cz - p.d / 2 + 0.02, p.cz + p.d / 2 - 0.02));
+  const uvS = projUV(refr.vp, positionWorld), dUV = projUV(refr.vp, hit).sub(uvS);
+  const seen = vec3( // a hint of dispersion: each channel bends a touch differently
+    texture(refr.rt.texture, uvS.add(dUV.mul(1.05))).r,
+    texture(refr.rt.texture, uvS.add(dUV)).g,
+    texture(refr.rt.texture, uvS.add(dUV.mul(0.95))).b);
+  // keep what's seen through the water no brighter than the old teal body, so the reflections keep their contrast
+  const absorb = exp(vec3(0.6, 0.15, 0.2).mul(U.murk).mul(pathLen).negate());
+  const vis = absorb.g.mul(U.seeThrough);
+  const under = mix(body, seen.mul(vec3(0.3, 0.7, 0.65)).mul(absorb.div(absorb.g.max(1e-3))), vis).mul(U.waterDarken);
   wm.colorNode = vec3(0, 0.01, 0.012);
-  wm.emissiveNode = sampleMirror(waterMirror, g.mul(0.3), 0.004, 6).mul(vec3(0.6, 0.9, 0.85)).mul(fres).add(body.mul(fres.oneMinus())).add(vec3(0.8, 1.0, 0.95).mul(glint));
+  wm.emissiveNode = sampleMirror(waterMirror, g.mul(0.3), 0.004, 6).mul(vec3(0.6, 0.9, 0.85)).mul(U.reflect).mul(fres).add(under.mul(fres.oneMinus())).add(vec3(0.8, 1.0, 0.95).mul(glint));
   const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape, 10).rotateX(-Math.PI / 2), wm);
   mesh.position.y = WL; scene.add(mesh); waterMeshes.push(mesh);
 }
@@ -255,9 +339,11 @@ const bar = (a, b, r = 0.035) => {
 };
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
+const basinMeshes = [];
 for (const p of pools) {
   const ps = rrect(new THREE.Shape(), p.cx, -p.cz, p.w, p.d, CORNER);
-  add(new THREE.ExtrudeGeometry(ps, { depth: 0.6, bevelEnabled: false, curveSegments: 10 }).rotateX(-Math.PI / 2).translate(0, -0.6, 0), basinMat, 0, 0, 0);
+  const basin = add(new THREE.ExtrudeGeometry(ps, { depth: POOL_DEPTH, bevelEnabled: false, curveSegments: 10 }).rotateX(-Math.PI / 2).translate(0, -POOL_DEPTH, 0), basinMat, 0, 0, 0);
+  basin.layers.enable(1); basinMeshes.push(basin);
   makeWater(p, ps);
   const ring = rrect(new THREE.Shape(), p.cx, -p.cz, p.w + COPING * 2, p.d + COPING * 2, CORNER + COPING);
   ring.holes.push(rrect(new THREE.Path(), p.cx, -p.cz, p.w, p.d, CORNER));
@@ -276,11 +362,11 @@ for (const p of pools) {
 }
 
 /* ---------- post: center-bulge fisheye + whisper of bloom ---------- */
-const fishBulge = 0.9; // dome strength (keep under ~1.4; corners stay pinned so no edge tiling)
 const post = new THREE.PostProcessing(renderer);
 const sp = pass(scene, camera);
 // bloom first (undistorted), then fisheye-sample the combined image so glow sticks to the lights
-const preFish = convertToTexture(sp.add(bloom(sp, 0.3, 0.7, 1.0)));
+const bloomPass = bloom(sp, 0.3, 0.7, 1.0);
+const preFish = convertToTexture(sp.add(bloomPass));
 post.outputNode = (() => {
   // circular coords so the bulge is a round dome, not stretched by aspect
   const aspect = screenSize.x.div(screenSize.y);
@@ -288,29 +374,33 @@ post.outputNode = (() => {
   const r = length(uv).max(1e-4);
   const corner = length(vec2(aspect.mul(0.5), float(0.5))); // pin screen corners → no wrap/tile at edges
   const rn = r.div(corner);
-  const newRn = tan(rn.mul(fishBulge)).div(tan(float(fishBulge)));
+  const newRn = tan(rn.mul(U.bulge.max(0.01))).div(tan(U.bulge.max(0.01)));
   const warped = uv.mul(newRn.div(rn));
   const fishUV = vec2(warped.x.div(aspect), warped.y).add(0.5);
-  const ca = uv.mul(dot(uv, uv).mul(0.012));
+  const ca = uv.mul(dot(uv, uv).mul(U.ca));
   const caUV = vec2(ca.x.div(aspect), ca.y);
   const c = vec3(
     preFish.sample(fishUV.add(caUV)).r,
     preFish.sample(fishUV).g,
     preFish.sample(fishUV.sub(caUV)).b
   );
-  const grain = fract(sin(dot(screenUV.add(fract(time.mul(0.37))), vec2(12.9898, 78.233))).mul(43758.5453)).sub(0.5).mul(0.02);
-  return vec4(c.mul(vec3(0.97, 1.0, 0.985)).add(grain), 1);
+  const grain = fract(sin(dot(screenUV.add(fract(time.mul(0.37))), vec2(12.9898, 78.233))).mul(43758.5453)).sub(0.5).mul(U.grain);
+  // eyelids: two curved lids meet in the middle as U.blink goes 0 -> 1, with a soft shadowed edge
+  const lidEdge = mix(float(0.75), float(-0.06), U.blink);
+  const lx = uv.x.div(aspect.mul(0.5)); // -1..1 across the screen whatever the aspect
+  const lidY = abs(uv.y).add(lx.mul(lx).mul(0.12));
+  const lids = smoothstep(lidEdge, lidEdge.sub(0.09), lidY);
+  return vec4(c.mul(vec3(0.97, 1.0, 0.985)).mul(lids).add(grain.mul(lids)), 1);
 })();
 
 /* ---------- controls ---------- */
-const walkSpeed = 2; // desktop WASD walk speed (units/sec); phone still scales via joystick push
-const sprintSpeed = 5; // desktop Shift sprint speed
+const move = { walkSpeed: 2, sprintSpeed: 5 }; // desktop WASD / Shift sprint (units/sec); phone scales via joystick push
 const controls = new PointerLockControls(camera, renderer.domElement);
 controls.pointerSpeed = 1.75; // 0.002 * 1.75 = the 0.0035 rad/px the drag-look used
 controls.minPolarAngle = Math.PI / 2 - 1.3;
 controls.maxPolarAngle = Math.PI / 2 + 1.3; // keeps the old ±1.3 rad pitch clamp
 const keys = {};
-addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keydown', e => { if (e.target.closest?.('.lil-gui')) return; keys[e.code] = true; if (e.code === 'KeyG') gui._hidden ? gui.show() : gui.hide(); if (e.code === 'KeyM') { sound.muted = !sound.muted; applyVolumes(); gui.controllersRecursive().forEach(c => c.updateDisplay()); } });
 addEventListener('keyup', e => keys[e.code] = false);
 const cv = renderer.domElement;
 cv.addEventListener('pointerdown', e => { if (e.pointerType !== 'touch') controls.lock(); }); // a click captures the mouse; Esc releases it
@@ -335,6 +425,91 @@ const blocked = (x, z) => {
   return pools.some(p => Math.abs(x - p.cx) < p.w / 2 + RAIL + 0.35 && Math.abs(z - p.cz) < p.d / 2 + RAIL + 0.35);
 };
 
+/* ---------- head bob, eye blinks ---------- */
+const bob = { strength: 1, roll: true, phase: 0, amt: 0, step: 0 };
+const blinkCfg = { enabled: true, every: 4.5, t0: -1, next: performance.now() + 3000, double: false };
+function updateBlink(now) {
+  if (!blinkCfg.enabled) { U.blink.value = 0; return; }
+  if (blinkCfg.t0 < 0 && now >= blinkCfg.next) blinkCfg.t0 = now;
+  if (blinkCfg.t0 < 0) return;
+  const t = now - blinkCfg.t0; // close fast, hold a beat, open a little slower
+  const v = t < 75 ? t / 75 : t < 115 ? 1 : t < 300 ? 1 - (t - 115) / 185 : 0;
+  U.blink.value = v * v * (3 - 2 * v);
+  if (t >= 300) {
+    blinkCfg.t0 = -1;
+    const again = !blinkCfg.double && Math.random() < 0.18; // now and then, a quick double blink
+    blinkCfg.double = again;
+    blinkCfg.next = now + (again ? 140 : blinkCfg.every * 1000 * (0.45 + Math.random() * 1.1));
+  }
+}
+
+/* ---------- sound: Pixabay recordings in sounds/ (see sounds/CREDITS.txt), played through Web Audio ---------- */
+// barefoot steps on tile (10 variations), pool water, and cave drips; footsteps and
+// drips also go through a long synthetic hall reverb so they ring around the tiles like the room does
+const sound = { master: 0.8, steps: 0.9, ambience: 0.6, water: 0.15, muted: false, ctx: null, buf: {} };
+const SND = { step: 10, drip: 6 };
+function initAudio() {
+  if (sound.ctx) { if (sound.ctx.state !== 'running') sound.ctx.resume(); return; }
+  const ctx = sound.ctx = new AudioContext();
+  const master = sound.masterGain = ctx.createGain(); master.connect(ctx.destination);
+  const ir = ctx.createBuffer(2, ctx.sampleRate * 3.8, ctx.sampleRate); // big tiled hall: long, bright tail
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < d.length; i++) { const t = i / ctx.sampleRate; d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t / 3.8, 2.2) * (t < 0.012 ? t / 0.012 : 1); } }
+  const verb = ctx.createConvolver(); verb.buffer = ir;
+  const wet = ctx.createGain(); wet.gain.value = 0.45; verb.connect(wet); wet.connect(master);
+  sound.verb = verb;
+  sound.stepBus = ctx.createGain(); sound.stepBus.connect(master); sound.stepBus.connect(verb);
+  sound.ambBus = ctx.createGain(); sound.ambBus.connect(master); // the ambience recordings already carry their room
+  sound.dripBus = ctx.createGain(); sound.dripBus.gain.value = 0.35; sound.dripBus.connect(sound.ambBus); sound.dripBus.connect(verb);
+  applyVolumes();
+  const load = async name => sound.buf[name] = await ctx.decodeAudioData(await (await fetch('sounds/' + name + '.mp3')).arrayBuffer());
+  const names = ['ambience_water'];
+  for (const [k, n] of Object.entries(SND)) for (let i = 1; i <= n; i++) names.push(k + i);
+  Promise.all(names.map(n => load(n).catch(e => console.warn('sound', n, e)))).then(() => {
+    const loop = (name, gain) => { const b = sound.buf[name]; if (!b) return;
+      const src = ctx.createBufferSource(), g = ctx.createGain(); src.buffer = b; src.loop = true;
+      g.gain.setValueAtTime(0, ctx.currentTime); g.gain.linearRampToValueAtTime(gain, ctx.currentTime + 2.5); // fade in
+      src.connect(g); g.connect(sound.ambBus); src.start(0, Math.random() * b.duration); return g; };
+    sound.waterGain = loop('ambience_water', sound.water);
+    const drip = () => {
+      const b = sound.buf['drip' + (1 + Math.floor(Math.random() * SND.drip))];
+      if (b) { const src = ctx.createBufferSource(), g = ctx.createGain(), pan = ctx.createStereoPanner();
+        src.buffer = b; src.playbackRate.value = 0.8 + Math.random() * 0.45; g.gain.value = 0.35 + Math.random() * 0.65; pan.pan.value = Math.random() * 1.6 - 0.8;
+        src.connect(g); g.connect(pan); pan.connect(sound.dripBus); src.start(); }
+      setTimeout(drip, 2000 + Math.random() * 7000);
+    };
+    setTimeout(drip, 2500);
+  });
+}
+function applyVolumes() {
+  if (!sound.ctx) return;
+  const t = sound.ctx.currentTime;
+  sound.masterGain.gain.setTargetAtTime(sound.muted ? 0 : sound.master, t, 0.05);
+  sound.stepBus.gain.setTargetAtTime(sound.steps, t, 0.05);
+  sound.ambBus.gain.setTargetAtTime(sound.ambience, t, 0.05);
+  if (sound.waterGain) sound.waterGain.gain.setTargetAtTime(sound.water, t, 0.05);
+}
+let lastStep = 0;
+function footstep(loud, side) {
+  const ctx = sound.ctx; if (!ctx || ctx.state !== 'running') return;
+  let k; do k = 1 + Math.floor(Math.random() * SND.step); while (k === lastStep && SND.step > 1); lastStep = k; // never the same sample twice in a row
+  const b = sound.buf['step' + k]; if (!b) return;
+  const src = ctx.createBufferSource(), g = ctx.createGain(), pan = ctx.createStereoPanner();
+  src.buffer = b; src.playbackRate.value = (loud > 1 ? 1.06 : 0.97) + Math.random() * 0.08; // slight pitch variety
+  g.gain.value = (0.8 + Math.random() * 0.3) * loud; pan.pan.value = side * 0.15;
+  src.connect(g); g.connect(pan); pan.connect(sound.stepBus); src.start();
+}
+// start screen: the Enter click is the user gesture browsers require for sound (and for capturing the mouse)
+let started = false;
+window.__onStart = () => {
+  started = true;
+  initAudio();
+  gui.show();
+  if (!matchMedia('(pointer: coarse)').matches) controls.lock();
+  setTimeout(() => document.getElementById('hint').style.opacity = 0, 7000);
+};
+// browsers only allow audio after a user gesture
+for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, initAudio, { passive: true });
+
 addEventListener('resize', () => { fitFov(); renderer.setSize(innerWidth, innerHeight); });
 
 let last = performance.now(), frames = 0;
@@ -343,13 +518,26 @@ renderer.setAnimationLoop(() => {
   const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
   const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) - joy.y;
   const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + joy.x;
-  const spd = (keys.ShiftLeft ? sprintSpeed : walkSpeed) * dt;
+  const go = started ? 1 : 0; // no walking behind the start screen
+  const spd = go * (keys.ShiftLeft || keys.ShiftRight ? move.sprintSpeed : move.walkSpeed) * dt;
   const yaw = camera.rotation.y, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
   const dx = (fx * f - fz * s) * spd, dz = (fz * f + fx * s) * spd;
   const p = camera.position;
+  const ox = p.x, oz = p.z;
   if (!blocked(p.x + dx, p.z)) p.x += dx;
   if (!blocked(p.x, p.z + dz)) p.z += dz;
-  p.y = 1.7 + Math.sin(now * 0.0016) * 0.008;
+  // head bob: driven by distance actually travelled (so walking into a wall doesn't bob); a footfall at each dip
+  const moved = Math.hypot(p.x - ox, p.z - oz), speed = moved / Math.max(dt, 1e-4);
+  const sprinting = speed > (move.walkSpeed + move.sprintSpeed) / 2;
+  const stride = sprinting ? 0.95 : 0.72;
+  bob.phase += moved / stride * Math.PI;
+  bob.amt += ((speed > 0.2 ? 1 : 0) - bob.amt) * Math.min(1, dt * 8);
+  const amp = (sprinting ? 0.065 : 0.04) * bob.strength;
+  const stepNo = Math.floor(bob.phase / Math.PI);
+  if (stepNo !== bob.step) { bob.step = stepNo; if (speed > 0.2) footstep(sprinting ? 1.25 : 0.85, stepNo % 2 ? 1 : -1); }
+  p.y = 1.7 + Math.sin(now * 0.0016) * 0.008 + (Math.abs(Math.sin(bob.phase)) - 0.6) * amp * bob.amt;
+  camera.rotation.z = bob.roll ? Math.sin(bob.phase) * 0.006 * bob.strength * bob.amt * (sprinting ? 1.5 : 1) : 0;
+  updateBlink(now);
   camera.updateMatrixWorld();
   renderMirror(floorMirror, [floorMesh, ...copingMeshes]);
   renderMirror(waterMirror, waterMeshes);
@@ -358,7 +546,60 @@ renderer.setAnimationLoop(() => {
     if (frustum.intersectsBox(wallBoxes[i] ||= new THREE.Box3().setFromObject(wallMeshes[i]))) renderMirror(m, [wallMeshes[i]]);
   });
   if (frustum.intersectsBox(wallBoxes.ceil ||= new THREE.Box3().setFromObject(ceilMesh))) renderMirror(ceilMirror, [ceilMesh]);
+  renderRefraction();
   post.render();
   // two frames in: the node materials are compiled and the canvas is actually showing the room
-  if (++frames === 2) { window.__ldDone(); setTimeout(() => document.getElementById('hint').style.opacity = 0, 7000); }
+  if (++frames === 2) window.__ldDone(); // shows the Enter button on the start screen
 });
+
+/* ---------- controls panel (G toggles it) ---------- */
+const gui = new GUI({ title: 'Controls  (G to hide)' });
+if (innerWidth < 700) gui.close();
+gui.hide(); // appears once the start screen is dismissed
+const slider = (folder, obj, key, min, max, step, name) => folder.add(obj, key, min, max, step).name(name);
+const u = (folder, k, min, max, step, name) => slider(folder, U[k], 'value', min, max, step, name);
+const fW = gui.addFolder('Water');
+u(fW, 'waterDarken', 0.2, 1.5, 0.01, 'Brightness');
+u(fW, 'seeThrough', 0, 1, 0.01, 'See-through');
+u(fW, 'murk', 0, 3, 0.01, 'Murkiness');
+u(fW, 'reflect', 0, 2, 0.01, 'Reflection');
+u(fW, 'waves', 0, 3, 0.01, 'Wave height');
+u(fW, 'glint', 0, 3, 0.01, 'Sun glints');
+const depthCtl = { depth: POOL_DEPTH };
+slider(fW, depthCtl, 'depth', 0.5, 8, 0.1, 'Pool depth').onChange(v => {
+  U.depth.value = v; for (const b of basinMeshes) b.scale.y = v / POOL_DEPTH; // basin top stays at the deck
+});
+const fL = gui.addFolder('Lighting');
+slider(fL, renderer, 'toneMappingExposure', 0.2, 1.5, 0.01, 'Exposure');
+slider(fL, hemi, 'intensity', 0, 3, 0.01, 'Ambient light');
+slider(fL, sun, 'intensity', 0, 3, 0.01, 'Sun');
+slider(fL, scene.fog, 'density', 0, 0.04, 0.001, 'Fog');
+u(fL, 'ao', 0, 1.5, 0.01, 'Ambient occlusion');
+const fP = gui.addFolder('Post effects');
+slider(fP, bloomPass.strength, 'value', 0, 2, 0.01, 'Bloom');
+slider(fP, bloomPass.threshold, 'value', 0, 2, 0.01, 'Bloom threshold');
+u(fP, 'bulge', 0, 1.4, 0.01, 'Fisheye');
+u(fP, 'ca', 0, 0.05, 0.001, 'Colour fringing');
+u(fP, 'grain', 0, 0.1, 0.001, 'Film grain');
+const fM = gui.addFolder('Movement');
+slider(fM, move, 'walkSpeed', 0.5, 10, 0.1, 'Walk speed');
+slider(fM, move, 'sprintSpeed', 1, 20, 0.1, 'Sprint speed');
+slider(fM, controls, 'pointerSpeed', 0.2, 5, 0.05, 'Mouse sensitivity');
+slider(fM, bob, 'strength', 0, 3, 0.05, 'Head bob');
+fM.add(bob, 'roll').name('Head sway');
+const fE = gui.addFolder('Eyes');
+fE.add(blinkCfg, 'enabled').name('Blinking');
+slider(fE, blinkCfg, 'every', 1, 15, 0.5, 'Avg seconds between');
+fE.add({ blink: () => { blinkCfg.t0 = -1; blinkCfg.next = 0; } }, 'blink').name('Blink now');
+const fS = gui.addFolder('Sound');
+fS.add(sound, 'muted').name('Mute (M)').onChange(applyVolumes);
+slider(fS, sound, 'master', 0, 1, 0.01, 'Master').onChange(applyVolumes);
+slider(fS, sound, 'steps', 0, 2, 0.01, 'Footsteps').onChange(applyVolumes);
+slider(fS, sound, 'ambience', 0, 2, 0.01, 'Ambience').onChange(applyVolumes);
+slider(fS, sound, 'water', 0, 1, 0.01, 'Water').onChange(applyVolumes);
+const fQ = gui.addFolder('Quality');
+const q = { refraction: refr.scale };
+slider(fQ, q, 'refraction', 0.25, 1, 0.05, 'Refraction res').onChange(v => refr.scale = v);
+slider(fQ, { pr: renderer.getPixelRatio() }, 'pr', 0.5, 2, 0.05, 'Pixel ratio').onChange(v => renderer.setPixelRatio(v));
+gui.add({ reset: () => gui.reset() }, 'reset').name('Reset all');
+fP.close(); fM.close(); fE.close(); fQ.close();

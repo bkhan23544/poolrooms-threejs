@@ -1,7 +1,7 @@
 Sound effects from Pixabay (https://pixabay.com/sound-effects/), used under the Pixabay Content License.
 All files here were trimmed, sliced, normalised and (for the ambience) made seamlessly loopable.
 
-step1-10.mp3        "01-10 Footsteps, Tile, Male Barefoot, Slow Pace" by freesound_community
+step1-7.mp3         "01-10 Footsteps, Tile, Male Barefoot, Slow Pace" by freesound_community
                     https://pixabay.com/sound-effects/household-01-10-footsteps-tile-male-barefoot-slow-pace-33546/
 drip1-6.mp3         "Droplets in a cave" by freesound_community
                     https://pixabay.com/sound-effects/film-special-effects-droplets-in-a-cave-6785/

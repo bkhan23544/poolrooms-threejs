@@ -503,7 +503,6 @@ let started = false;
 window.__onStart = () => {
   started = true;
   initAudio();
-  gui.show();
   if (!matchMedia('(pointer: coarse)').matches) controls.lock();
   setTimeout(() => document.getElementById('hint').style.opacity = 0, 7000);
 };
@@ -553,9 +552,9 @@ renderer.setAnimationLoop(() => {
 });
 
 /* ---------- controls panel (G toggles it) ---------- */
-const gui = new GUI({ title: 'Controls  (G to hide)' });
+const gui = new GUI({ title: 'Controls  (G to toggle)' });
 if (innerWidth < 700) gui.close();
-gui.hide(); // appears once the start screen is dismissed
+gui.hide(); // hidden by default: G shows it
 const slider = (folder, obj, key, min, max, step, name) => folder.add(obj, key, min, max, step).name(name);
 const u = (folder, k, min, max, step, name) => slider(folder, U[k], 'value', min, max, step, name);
 const fW = gui.addFolder('Water');

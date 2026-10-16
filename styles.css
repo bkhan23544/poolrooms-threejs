@@ -15,7 +15,7 @@
 :root[data-theme="dark"]{--bg:#9aa59d;--ink:#1a2e2a;--card:rgba(215,224,218,.9)}
 html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:Roboto,system-ui,sans-serif;color:var(--ink)}
 canvas{display:block;width:100%;height:100%;touch-action:none}
-#loader{position:fixed;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:linear-gradient(180deg,#0e3a37,#071d20);color:var(--tile);transition:opacity .5s ease;pointer-events:none;font-family:Roboto,system-ui,sans-serif}
+#loader{position:fixed;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:linear-gradient(180deg,#0e3a37,#071d20);color:var(--tile);transition:opacity .5s ease,background .8s ease,backdrop-filter .8s ease;pointer-events:none;font-family:Roboto,system-ui,sans-serif}
 #loaderWord{font-size:13px;font-weight:500;letter-spacing:.18em;text-transform:uppercase}
 #loaderBar{position:relative;width:min(260px,58vw);height:3px;border-radius:2px;background:rgba(215,224,218,.16)}
 #loaderBar::after{content:"";position:absolute;inset:0;border-radius:2px;background:linear-gradient(90deg,transparent,rgba(120,190,182,.75),transparent);background-size:70px 100%;background-repeat:no-repeat;animation:ldslide 1.7s linear infinite}
@@ -70,3 +70,26 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #ao input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:8px;background:linear-gradient(180deg,var(--tile),var(--tile-deep));border:1px solid var(--ink)}
 #ao input[type=checkbox]{width:15px;height:15px;accent-color:var(--pool)}
 @media (max-width:600px){#ao{font-size:10px;gap:5px}#ao input[type=range]{width:64px}}
+
+/* start screen: the loader, once everything is ready */
+#start{display:none;flex-direction:column;align-items:center;gap:18px;max-width:min(520px,calc(100vw - 32px));text-align:center}
+#loader.ready{background:linear-gradient(180deg,rgba(14,58,55,.62),rgba(7,29,32,.78));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);pointer-events:auto}
+#loader.ready #loaderBar,#loader.ready #loaderLabel{display:none}
+#loader.ready #loaderWord{font-size:clamp(30px,7vw,52px);font-weight:400;letter-spacing:.32em;margin-right:-.32em;animation:rise .9s ease both}
+#loader.ready #start{display:flex;animation:rise .9s .15s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+#tagline{margin:0;font-size:15px;line-height:1.5;opacity:.8}
+#keys{list-style:none;margin:4px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,auto);gap:10px 22px;font-size:12px;letter-spacing:.04em;opacity:.85}
+#keys li{display:flex;align-items:center;gap:8px;white-space:nowrap}
+#keys kbd{font:500 11px Roboto,system-ui,sans-serif;letter-spacing:.06em;padding:4px 7px;border-radius:3px;color:var(--ink);background:linear-gradient(180deg,var(--tile),var(--tile-deep));border:1px solid var(--grout);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 2px 0 rgba(0,0,0,.25)}
+#touchKeys{display:none;margin:0;font-size:13px;opacity:.8}
+@media (pointer:coarse){#keys{display:none}#touchKeys{display:block}}
+#startBtn{margin-top:8px;min-width:170px;min-height:48px;padding:0 30px;font:500 14px Roboto,system-ui,sans-serif;letter-spacing:.24em;text-transform:uppercase;color:var(--ink);cursor:pointer;
+  background:linear-gradient(180deg,rgba(255,255,255,.35),transparent 42%),linear-gradient(180deg,var(--tile),var(--tile-deep));
+  border:1px solid var(--grout);border-radius:3px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 0 6px rgba(61,138,132,.18),0 10px 30px rgba(0,0,0,.35);
+  transition:transform .15s ease,box-shadow .2s ease,color .15s ease}
+#startBtn:hover{color:var(--pool);transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 8px rgba(61,138,132,.28),0 14px 34px rgba(0,0,0,.4)}
+#startBtn:active{transform:none}
+#startBtn:focus-visible{outline:2px solid var(--pool-glow);outline-offset:4px}
+#phones{margin:0;font-size:11px;letter-spacing:.06em;opacity:.55}
+@media (max-width:480px){#keys{grid-template-columns:repeat(2,auto)}}

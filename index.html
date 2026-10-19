@@ -58,7 +58,7 @@
 <script>
   document.querySelectorAll('#links a').forEach(a => {
     const isGithub = a.href.includes('github.com');
-    a.addEventListener('click', () => gtag('event', isGithub ? 'code_click' : 'follow_on_x'));
+    a.addEventListener('click', () => gtag('event', isGithub ? 'code_click' : 'about_me'));
   });
 </script>
 <div id="msg"></div>
